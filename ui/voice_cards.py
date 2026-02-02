@@ -14,8 +14,8 @@ from typing import Any
 
 import gradio as gr
 
-os.environ['no_proxy'] = 'localhost,127.0.0.1'
-os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
+os.environ["no_proxy"] = "localhost,127.0.0.1"
+os.environ["NO_PROXY"] = "localhost,127.0.0.1"
 
 ROLES = ["Host", "Expert", "Guest", "Narrator"]
 ROLE_COLORS = {
@@ -35,12 +35,13 @@ def get_voice_list() -> list[dict[str, Any]]:
     """Get list of available voices with fallback."""
     try:
         from storage.voice import get_available_voices
+
         voices = get_available_voices()
         if voices:
             return voices
     except Exception as e:
         print(f"Warning: Could not load voices: {e}")
-    
+
     return [
         {"voice_id": "serena", "name": "Serena", "type": "preset"},
         {"voice_id": "ryan", "name": "Ryan", "type": "preset"},
@@ -54,7 +55,7 @@ def generate_preview(voice_id: str, voice_type: str) -> str | None:
     try:
         from qwen_tts_ui import get_model
         import soundfile as sf
-        
+
         if voice_type == "preset":
             model = get_model("1.7B-CustomVoice")
             wavs, sr = model.generate_custom_voice(
@@ -74,22 +75,22 @@ def generate_preview(voice_id: str, voice_type: str) -> str | None:
         else:
             import pickle
             from pathlib import Path
-            
+
             SAVED_VOICES_DIR = Path("saved_voices")
             voice_dir = SAVED_VOICES_DIR / voice_id
             prompt_path = voice_dir / "prompt.pkl"
             meta_path = voice_dir / "metadata.json"
-            
+
             if not prompt_path.exists():
                 return None
-            
+
             with open(meta_path) as f:
                 meta = json.load(f)
             model_name = meta.get("model", "1.7B-Base")
-            
+
             with open(prompt_path, "rb") as f:
                 voice_clone_prompt = pickle.load(f)
-            
+
             model = get_model(model_name)
             wavs, sr = model.generate_voice_clone(
                 text=PREVIEW_TEXT,
@@ -104,11 +105,11 @@ def generate_preview(voice_id: str, voice_type: str) -> str | None:
                 subtalker_top_k=50,
                 subtalker_top_p=1.0,
             )
-        
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             sf.write(f.name, wavs[0], sr)
             return f.name
-            
+
     except Exception as e:
         print(f"Preview generation failed: {e}")
         return None
@@ -116,21 +117,25 @@ def generate_preview(voice_id: str, voice_type: str) -> str | None:
 
 def render_voice_cards(voices: list[dict], selections: dict) -> str:
     """Render HTML for voice cards grid."""
-    
+
     cards_html = []
-    
+
     for voice in voices:
         voice_id = voice["voice_id"]
         name = voice.get("name", voice_id)
         voice_type = voice.get("type", "preset")
         is_selected = voice_id in selections
         role = selections.get(voice_id, {}).get("role", "")
-        
+
         type_badge = "PRESET" if voice_type == "preset" else "SAVED"
         type_class = "badge-preset" if voice_type == "preset" else "badge-saved"
         selected_class = "selected" if is_selected else ""
-        role_indicator = f'<div class="role-indicator" style="background: {ROLE_COLORS.get(role, "transparent")}"></div>' if role else ""
-        
+        role_indicator = (
+            f'<div class="role-indicator" style="background: {ROLE_COLORS.get(role, "transparent")}"></div>'
+            if role
+            else ""
+        )
+
         card_html = f'''
         <div class="voice-card {selected_class}" data-voice-id="{voice_id}">
             {role_indicator}
@@ -146,61 +151,73 @@ def render_voice_cards(voices: list[dict], selections: dict) -> str:
         </div>
         '''
         cards_html.append(card_html)
-    
+
     return f'<div class="voice-cards-grid">{"".join(cards_html)}</div>'
 
 
 def get_selection_summary(selections: dict) -> str:
     """Generate selection summary HTML."""
     count = len(selections)
-    
+
     if count == 0:
         return '<div class="selection-summary empty">No voices selected. Select 1-4 voices to continue.</div>'
-    
+
     if count < MIN_VOICES:
         return f'<div class="selection-summary warning">Selected {count} voice{"s" if count != 1 else ""}. Need at least {MIN_VOICES}.</div>'
-    
+
     if count > MAX_VOICES:
         return f'<div class="selection-summary error">Too many voices! Maximum is {MAX_VOICES}.</div>'
-    
-    voice_list = ", ".join([f'<span class="voice-tag" style="border-left: 3px solid {ROLE_COLORS.get(v["role"], "#666")}">{v["name"]} ({v["role"]})</span>' for v in selections.values()])
+
+    voice_list = ", ".join(
+        [
+            f'<span class="voice-tag" style="border-left: 3px solid {ROLE_COLORS.get(v["role"], "#666")}">{v["name"]} ({v["role"]})</span>'
+            for v in selections.values()
+        ]
+    )
     return f'<div class="selection-summary valid">{voice_list}</div>'
 
 
-def toggle_voice_selection(voice_id: str, voice_name: str, voice_type: str, 
-                           role: str, current_selections: dict) -> tuple[dict, str, str]:
+def toggle_voice_selection(
+    voice_id: str, voice_name: str, voice_type: str, role: str, current_selections: dict
+) -> tuple[dict, str, str]:
     """Toggle voice selection on/off and update state."""
     selections = current_selections.copy() if current_selections else {}
-    
+
     if voice_id in selections:
         del selections[voice_id]
     else:
         if len(selections) >= MAX_VOICES:
-            return selections, get_selection_summary(selections), f"Maximum {MAX_VOICES} voices allowed!"
-        
+            return (
+                selections,
+                get_selection_summary(selections),
+                f"Maximum {MAX_VOICES} voices allowed!",
+            )
+
         if not role:
             role = "Guest"
-        
+
         selections[voice_id] = {
             "voice_id": voice_id,
             "name": voice_name,
             "role": role,
-            "type": voice_type
+            "type": voice_type,
         }
-    
+
     summary = get_selection_summary(selections)
     status = f"{'Selected' if voice_id in selections else 'Deselected'} {voice_name}"
-    
+
     return selections, summary, status
 
 
-def update_voice_role(voice_id: str, new_role: str, current_selections: dict) -> tuple[dict, str]:
+def update_voice_role(
+    voice_id: str, new_role: str, current_selections: dict
+) -> tuple[dict, str]:
     """Update the role for a selected voice."""
     selections = current_selections.copy() if current_selections else {}
-    
+
     if voice_id in selections:
         selections[voice_id]["role"] = new_role
-    
+
     return selections, get_selection_summary(selections)
 
 
@@ -208,47 +225,51 @@ def validate_selections(selections: dict) -> tuple[bool, str, list[dict]]:
     """Validate current selections and return formatted output."""
     if not selections:
         return False, "No voices selected. Please select 1-4 voices.", []
-    
+
     count = len(selections)
-    
+
     if count < MIN_VOICES:
-        return False, f"Need at least {MIN_VOICES} voices. Currently selected: {count}", []
-    
+        return (
+            False,
+            f"Need at least {MIN_VOICES} voices. Currently selected: {count}",
+            [],
+        )
+
     if count > MAX_VOICES:
-        return False, f"Maximum {MAX_VOICES} voices allowed. Currently selected: {count}", []
-    
+        return (
+            False,
+            f"Maximum {MAX_VOICES} voices allowed. Currently selected: {count}",
+            [],
+        )
+
     for v in selections.values():
         if not v.get("role"):
             return False, f"Please assign a role to {v['name']}", []
-    
+
     output = [
-        {
-            "voice_id": v["voice_id"],
-            "role": v["role"],
-            "type": v["type"]
-        }
+        {"voice_id": v["voice_id"], "role": v["role"], "type": v["type"]}
         for v in selections.values()
     ]
-    
+
     return True, f"Valid selection: {count} voices ready!", output
 
 
 custom_css = """
 :root {
-    --bg-deep: #0a0a0f;
-    --bg-card: #14141f;
-    --bg-card-hover: #1a1a2e;
-    --bg-selected: #1e1e32;
-    --text-primary: #f0f0f5;
-    --text-secondary: #8888a0;
-    --text-muted: #555570;
-    --border-default: #2a2a40;
-    --border-selected: #5050ff;
+    --bg-deep: #f8f9fa;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f1f3f5;
+    --bg-selected: #e9ecef;
+    --text-primary: #212529;
+    --text-secondary: #6c757d;
+    --text-muted: #adb5bd;
+    --border-default: #dee2e6;
+    --border-selected: #495057;
     --accent-orange: #e85d04;
     --accent-blue: #0077b6;
     --accent-green: #38b000;
     --accent-purple: #9d4edd;
-    --glow-selected: 0 0 20px rgba(80, 80, 255, 0.3);
+    --glow-selected: 0 0 12px rgba(73, 80, 87, 0.2);
     --radius: 12px;
     --radius-sm: 6px;
 }
@@ -272,10 +293,6 @@ custom_css = """
     color: var(--text-primary);
     margin: 0;
     letter-spacing: -0.02em;
-    background: linear-gradient(135deg, #fff 0%, #8888ff 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
 }
 
 .sub-title {
@@ -306,7 +323,7 @@ custom_css = """
 
 .voice-card:hover {
     background: var(--bg-card-hover);
-    border-color: #3a3a55;
+    border-color: #ced4da;
     transform: translateY(-2px);
 }
 
@@ -354,15 +371,15 @@ custom_css = """
 }
 
 .badge-preset {
-    background: rgba(80, 80, 255, 0.15);
-    color: #8080ff;
-    border: 1px solid rgba(80, 80, 255, 0.3);
+    background: rgba(73, 80, 87, 0.1);
+    color: #495057;
+    border: 1px solid rgba(73, 80, 87, 0.2);
 }
 
 .badge-saved {
-    background: rgba(56, 176, 0, 0.15);
-    color: #50d020;
-    border: 1px solid rgba(56, 176, 0, 0.3);
+    background: rgba(56, 176, 0, 0.1);
+    color: #2d8a00;
+    border: 1px solid rgba(56, 176, 0, 0.25);
 }
 
 .card-status {
@@ -386,7 +403,7 @@ custom_css = """
 }
 
 .selection-summary.empty {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(0, 0, 0, 0.02);
     border: 1px dashed var(--border-default);
     color: var(--text-muted);
     justify-content: center;
@@ -437,9 +454,9 @@ custom_css = """
     border-bottom: 1px solid var(--border-default);
 }
 
-/* Form Controls - Dark Theme Override */
+/* Form Controls - Light Theme */
 .dark-form input, .dark-form select, .dark-form textarea {
-    background: var(--bg-deep) !important;
+    background: var(--bg-card) !important;
     border: 1px solid var(--border-default) !important;
     color: var(--text-primary) !important;
     border-radius: var(--radius-sm) !important;
@@ -451,7 +468,7 @@ custom_css = """
 
 /* Primary Button */
 .primary-btn {
-    background: linear-gradient(135deg, #4040ff 0%, #6060ff 100%) !important;
+    background: linear-gradient(135deg, #343a40 0%, #495057 100%) !important;
     border: none !important;
     color: white !important;
     font-weight: 600 !important;
@@ -462,8 +479,8 @@ custom_css = """
 }
 
 .primary-btn:hover {
-    background: linear-gradient(135deg, #5050ff 0%, #7070ff 100%) !important;
-    box-shadow: 0 4px 15px rgba(80, 80, 255, 0.3) !important;
+    background: linear-gradient(135deg, #495057 0%, #6c757d 100%) !important;
+    box-shadow: 0 4px 15px rgba(73, 80, 87, 0.25) !important;
 }
 
 /* Preview Button */
@@ -478,7 +495,7 @@ custom_css = """
 
 .preview-btn:hover {
     background: var(--bg-card-hover) !important;
-    border-color: #4a4a65 !important;
+    border-color: #ced4da !important;
     color: var(--text-primary) !important;
 }
 
@@ -531,170 +548,166 @@ custom_css = """
 
 def create_voice_cards_ui() -> gr.Blocks:
     """Create the voice cards selection UI."""
-    
+
     voices = get_voice_list()
-    
-    with gr.Blocks(css=custom_css, title="Voice Selection", theme=gr.themes.Base()) as demo:
-        
+
+    with gr.Blocks(
+        css=custom_css, title="Voice Selection", theme=gr.themes.Base()
+    ) as demo:
         selections_state = gr.State({})
         voices_state = gr.State(voices)
-        
+
         gr.HTML("""
         <div class="main-header">
             <h1 class="main-title">Voice Selection</h1>
             <p class="sub-title">Choose 1-4 voices for your podcast</p>
         </div>
         """)
-        
+
         summary_html = gr.HTML(
             value=get_selection_summary({}),
-            elem_classes=["selection-summary-container"]
+            elem_classes=["selection-summary-container"],
         )
-        
+
         with gr.Row():
             with gr.Column(scale=3):
                 gr.HTML('<div class="panel-title">Available Voices</div>')
-                
+
                 voice_rows = []
                 for i, voice in enumerate(voices):
                     with gr.Row(elem_classes=["voice-row"]):
                         cb = gr.Checkbox(
                             label=f"{voice['name']} ({voice['type'].upper()})",
                             value=False,
-                            scale=2
+                            scale=2,
                         )
                         role = gr.Dropdown(
                             choices=ROLES,
                             value="Guest",
                             label="Role",
                             scale=1,
-                            interactive=True
+                            interactive=True,
                         )
                         preview_btn = gr.Button(
-                            "Preview",
-                            size="sm",
-                            elem_classes=["preview-btn"],
-                            scale=1
+                            "Preview", size="sm", elem_classes=["preview-btn"], scale=1
                         )
                         voice_rows.append((voice, cb, role, preview_btn))
-        
+
             with gr.Column(scale=1):
                 gr.HTML('<div class="panel-title">Preview</div>')
                 preview_audio = gr.Audio(
-                    label="Voice Preview",
-                    type="filepath",
-                    interactive=False
+                    label="Voice Preview", type="filepath", interactive=False
                 )
-                preview_status = gr.Textbox(
-                    label="Status",
-                    interactive=False,
-                    lines=1
-                )
-        
+                preview_status = gr.Textbox(label="Status", interactive=False, lines=1)
+
         with gr.Row():
             with gr.Column():
                 gr.HTML('<div class="panel-title">Finalize Selection</div>')
-                
+
                 with gr.Row():
                     validate_btn = gr.Button(
                         "Validate & Continue",
                         variant="primary",
-                        elem_classes=["primary-btn"]
+                        elem_classes=["primary-btn"],
                     )
                     refresh_btn = gr.Button(
-                        "Refresh Voices",
-                        elem_classes=["preview-btn"]
+                        "Refresh Voices", elem_classes=["preview-btn"]
                     )
-                
+
                 validation_status = gr.HTML(value="")
-                output_json = gr.JSON(
-                    label="Selection Output",
-                    visible=True
-                )
-        
+                output_json = gr.JSON(label="Selection Output", visible=True)
+
         def make_toggle_handler(voice_info):
             def handler(is_checked, role_val, current_sels):
                 sels = current_sels.copy() if current_sels else {}
                 vid = voice_info["voice_id"]
-                
+
                 if is_checked:
                     if len(sels) < MAX_VOICES:
                         sels[vid] = {
                             "voice_id": vid,
                             "name": voice_info["name"],
                             "role": role_val,
-                            "type": voice_info["type"]
+                            "type": voice_info["type"],
                         }
                 else:
                     sels.pop(vid, None)
-                
+
                 return sels, get_selection_summary(sels)
+
             return handler
-        
+
         def make_role_handler(voice_info):
             def handler(new_role, current_sels):
                 sels = current_sels.copy() if current_sels else {}
                 vid = voice_info["voice_id"]
-                
+
                 if vid in sels:
                     sels[vid]["role"] = new_role
-                
+
                 return sels, get_selection_summary(sels)
+
             return handler
-        
+
         def make_preview_handler(voice_info):
             def handler():
-                audio_path = generate_preview(voice_info["voice_id"], voice_info["type"])
+                audio_path = generate_preview(
+                    voice_info["voice_id"], voice_info["type"]
+                )
                 if audio_path:
                     return audio_path, f"Preview: {voice_info['name']}"
-                return None, "Preview generation failed. Check if TTS model is available."
+                return (
+                    None,
+                    "Preview generation failed. Check if TTS model is available.",
+                )
+
             return handler
-        
+
         for voice_info, checkbox, role_dd, prev_btn in voice_rows:
             checkbox.change(
                 fn=make_toggle_handler(voice_info),
                 inputs=[checkbox, role_dd, selections_state],
-                outputs=[selections_state, summary_html]
+                outputs=[selections_state, summary_html],
             )
-            
+
             role_dd.change(
                 fn=make_role_handler(voice_info),
                 inputs=[role_dd, selections_state],
-                outputs=[selections_state, summary_html]
+                outputs=[selections_state, summary_html],
             )
-            
+
             prev_btn.click(
                 fn=make_preview_handler(voice_info),
                 inputs=[],
-                outputs=[preview_audio, preview_status]
+                outputs=[preview_audio, preview_status],
             )
-        
+
         def handle_validate(selections):
             is_valid, message, output = validate_selections(selections)
-            
+
             if is_valid:
-                status_html = f'<div class="validation-output validation-success">{message}</div>'
+                status_html = (
+                    f'<div class="validation-output validation-success">{message}</div>'
+                )
             else:
-                status_html = f'<div class="validation-output validation-error">{message}</div>'
-            
+                status_html = (
+                    f'<div class="validation-output validation-error">{message}</div>'
+                )
+
             return status_html, output if is_valid else {}
-        
+
         validate_btn.click(
             fn=handle_validate,
             inputs=[selections_state],
-            outputs=[validation_status, output_json]
+            outputs=[validation_status, output_json],
         )
-        
+
         def handle_refresh():
             new_voices = get_voice_list()
             return f"Loaded {len(new_voices)} voices"
-        
-        refresh_btn.click(
-            fn=handle_refresh,
-            inputs=[],
-            outputs=[preview_status]
-        )
-    
+
+        refresh_btn.click(fn=handle_refresh, inputs=[], outputs=[preview_status])
+
     return demo
 
 
@@ -702,34 +715,21 @@ def get_voice_selection_components():
     """Create reusable voice selection components for embedding in other UIs."""
     voices = get_voice_list()
     selections_state = gr.State({})
-    
+
     summary = gr.HTML(value=get_selection_summary({}))
-    
+
     voice_checkboxes = []
     role_dropdowns = []
-    
+
     for voice in voices[:8]:
-        cb = gr.Checkbox(
-            label=f"{voice['name']} ({voice['type']})",
-            value=False
-        )
-        role = gr.Dropdown(
-            choices=ROLES,
-            value="Guest",
-            label="Role",
-            interactive=True
-        )
+        cb = gr.Checkbox(label=f"{voice['name']} ({voice['type']})", value=False)
+        role = gr.Dropdown(choices=ROLES, value="Guest", label="Role", interactive=True)
         voice_checkboxes.append((voice, cb))
         role_dropdowns.append(role)
-    
+
     return selections_state, summary, voice_checkboxes, role_dropdowns
 
 
 if __name__ == "__main__":
     demo = create_voice_cards_ui()
-    demo.launch(
-        server_name="127.0.0.1",
-        server_port=7862,
-        share=False,
-        show_error=True
-    )
+    demo.launch(server_name="127.0.0.1", server_port=7862, share=False, show_error=True)

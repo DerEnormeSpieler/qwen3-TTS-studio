@@ -59,12 +59,31 @@ def get_openrouter_api_key() -> str:
     return api_key
 
 
+def get_anthropic_api_key() -> str:
+    """
+    Load and return the Anthropic API key from environment.
+
+    Returns:
+        str: The Anthropic API key
+
+    Raises:
+        ValueError: If ANTHROPIC_API_KEY is not set in environment
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "ANTHROPIC_API_KEY not found in environment. "
+            "Please ensure .env file exists with ANTHROPIC_API_KEY set."
+        )
+    return api_key
+
+
 def get_api_key_for_provider(provider: str) -> str:
     """
     Get the appropriate API key for the given provider.
 
     Args:
-        provider: The LLM provider ("openai", "ollama", or "openrouter")
+        provider: The LLM provider ("openai", "ollama", "openrouter", or "claude")
 
     Returns:
         str: The API key for the provider
@@ -78,5 +97,7 @@ def get_api_key_for_provider(provider: str) -> str:
         return get_openai_api_key()
     elif provider == "openrouter":
         return get_openrouter_api_key()
+    elif provider == "claude":
+        return get_anthropic_api_key()
     else:
         raise ValueError(f"Unknown provider: {provider}")

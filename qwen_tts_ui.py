@@ -65,7 +65,14 @@ from storage.persona import delete_persona, list_personas, load_persona, save_pe
 from podcast.models import Outline, Transcript, SpeakerProfile
 from storage.voice import get_available_voices, get_saved_voices, create_speaker_profile
 from config import get_openai_api_key
-from podcast.llm_client import LLMConfig, LLMProvider, get_default_config, validate_connection, DEFAULT_MODELS
+from podcast.llm_client import (
+    LLMConfig,
+    LLMProvider,
+    PROVIDER_MODEL_OPTIONS,
+    DEFAULT_MODELS,
+    get_default_config,
+    validate_connection,
+)
 
 
 def auto_transcribe_audio(audio_path: str | None) -> str:
@@ -4297,16 +4304,18 @@ with gr.Blocks(title="Qwen3-TTS Studio") as demo:
                             )
                             with gr.Accordion("LLM Provider", open=False):
                                 podcast_llm_provider = gr.Dropdown(
-                                    choices=["OpenAI", "Ollama", "OpenRouter"],
+                                    choices=["OpenAI", "Ollama", "OpenRouter", "Claude"],
                                     value="Ollama",
                                     label="Provider",
                                     info="LLM service for script generation",
                                 )
-                                podcast_llm_model = gr.Textbox(
+                                podcast_llm_model = gr.Dropdown(
                                     label="Model",
+                                    choices=PROVIDER_MODEL_OPTIONS[LLMProvider.OLLAMA],
                                     value=DEFAULT_MODELS[LLMProvider.OLLAMA],
                                     placeholder="Model name (leave empty for default)",
                                     info="Model to use for generation",
+                                    allow_custom_value=True,
                                 )
                                 podcast_llm_api_key = gr.Textbox(
                                     label="API Key",
@@ -4529,27 +4538,36 @@ with gr.Blocks(title="Qwen3-TTS Studio") as demo:
                             "OpenAI": LLMProvider.OPENAI,
                             "Ollama": LLMProvider.OLLAMA,
                             "OpenRouter": LLMProvider.OPENROUTER,
+                            "Claude": LLMProvider.CLAUDE,
                         }
                         provider = provider_map.get(provider_name, LLMProvider.OLLAMA)
                         default_model = DEFAULT_MODELS[provider]
+                        model_choices = PROVIDER_MODEL_OPTIONS[provider]
 
                         if provider == LLMProvider.OLLAMA:
                             return (
-                                gr.update(value=default_model),
+                                gr.update(choices=model_choices, value=default_model),
                                 gr.update(value="", placeholder="Not required for Ollama"),
                                 gr.update(value="http://localhost:11434/v1"),
                                 "",
                             )
                         elif provider == LLMProvider.OPENROUTER:
                             return (
-                                gr.update(value=default_model),
+                                gr.update(choices=model_choices, value=default_model),
                                 gr.update(value="", placeholder="Enter OpenRouter API key"),
                                 gr.update(value="https://openrouter.ai/api/v1"),
                                 "",
                             )
+                        elif provider == LLMProvider.CLAUDE:
+                            return (
+                                gr.update(choices=model_choices, value=default_model),
+                                gr.update(value="", placeholder="Enter Anthropic API key"),
+                                gr.update(value="", placeholder="Default Anthropic endpoint"),
+                                "",
+                            )
                         else:  # OpenAI
                             return (
-                                gr.update(value=default_model),
+                                gr.update(choices=model_choices, value=default_model),
                                 gr.update(value="", placeholder="Enter OpenAI API key"),
                                 gr.update(value=""),
                                 "",
@@ -4561,6 +4579,7 @@ with gr.Blocks(title="Qwen3-TTS Studio") as demo:
                             "OpenAI": LLMProvider.OPENAI,
                             "Ollama": LLMProvider.OLLAMA,
                             "OpenRouter": LLMProvider.OPENROUTER,
+                            "Claude": LLMProvider.CLAUDE,
                         }
                         provider = provider_map.get(provider_name, LLMProvider.OLLAMA)
 
@@ -4727,6 +4746,7 @@ with gr.Blocks(title="Qwen3-TTS Studio") as demo:
                             "OpenAI": LLMProvider.OPENAI,
                             "Ollama": LLMProvider.OLLAMA,
                             "OpenRouter": LLMProvider.OPENROUTER,
+                            "Claude": LLMProvider.CLAUDE,
                         }
                         llm_provider = provider_map.get(llm_provider_name, LLMProvider.OLLAMA)
 

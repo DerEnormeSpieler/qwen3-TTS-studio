@@ -1,4 +1,4 @@
-"""Unified LLM client abstraction supporting OpenAI, Ollama, and OpenRouter."""
+"""Unified LLM client abstraction supporting OpenAI, Ollama, OpenRouter, and Claude."""
 
 from __future__ import annotations
 
@@ -15,18 +15,50 @@ class LLMProvider(Enum):
     OPENAI = "openai"
     OLLAMA = "ollama"
     OPENROUTER = "openrouter"
+    CLAUDE = "claude"
 
 
 DEFAULT_MODELS = {
     LLMProvider.OPENAI: "gpt-5.2",
     LLMProvider.OLLAMA: "qwen3:8b",
     LLMProvider.OPENROUTER: "google/gemini-2.5-flash",
+    LLMProvider.CLAUDE: "claude-sonnet-4-5-20250929",
 }
 
 PROVIDER_BASE_URLS = {
     LLMProvider.OPENAI: "",
     LLMProvider.OLLAMA: "http://localhost:11434/v1",
     LLMProvider.OPENROUTER: "https://openrouter.ai/api/v1",
+    LLMProvider.CLAUDE: "",
+}
+
+PROVIDER_MODEL_OPTIONS: dict[LLMProvider, list[str]] = {
+    LLMProvider.OPENAI: [
+        "gpt-5.2",
+        "gpt-5.1",
+        "gpt-4.1",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ],
+    LLMProvider.OLLAMA: [
+        "qwen3:8b",
+        "qwen3:14b",
+        "llama3.1:8b",
+    ],
+    LLMProvider.OPENROUTER: [
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
+        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-opus-4.6",
+        "openai/gpt-5.2",
+        "openai/gpt-5.3-codex",
+        "deepseek/deepseek-r1",
+        "meta-llama/llama-3.3-70b-instruct",
+    ],
+    LLMProvider.CLAUDE: [
+        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-20250514",
+    ],
 }
 
 
@@ -42,7 +74,22 @@ class LLMConfig:
 
 
 def create_llm_client(config: LLMConfig) -> Any:
-    """Create an OpenAI-compatible client for the specified provider."""
+    """Create a provider client for the specified LLM provider."""
+    if config.provider == LLMProvider.CLAUDE:
+        try:
+            from anthropic import Anthropic
+        except ImportError as e:
+            raise ImportError(
+                "anthropic package is required for Claude. Install with: pip install anthropic"
+            ) from e
+
+        anthropic_kwargs: dict[str, Any] = {}
+        if config.api_key:
+            anthropic_kwargs["api_key"] = config.api_key
+        if config.base_url:
+            anthropic_kwargs["base_url"] = config.base_url
+        return Anthropic(**anthropic_kwargs)
+
     try:
         from openai import OpenAI
     except ImportError as e:
@@ -51,15 +98,12 @@ def create_llm_client(config: LLMConfig) -> Any:
         ) from e
 
     kwargs: dict[str, Any] = {}
-
     if config.provider == LLMProvider.OLLAMA:
         kwargs["api_key"] = "ollama"
-    else:
+    elif config.api_key:
         kwargs["api_key"] = config.api_key
-
     if config.base_url:
         kwargs["base_url"] = config.base_url
-
     return OpenAI(**kwargs)
 
 
@@ -88,6 +132,15 @@ def chat_completion(
         ValueError: If the LLM returns empty or invalid content.
         openai errors: After exhausting retries for transient API errors.
     """
+    if provider == LLMProvider.CLAUDE:
+        return _chat_completion_anthropic(
+            client=client,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            json_mode=json_mode,
+        )
+
     from openai import APIConnectionError, APIError, APITimeoutError, RateLimitError
 
     max_retries = 3
@@ -194,6 +247,81 @@ def _is_response_format_error(exc: Exception) -> bool:
     return "response_format" in message or "json_object" in message
 
 
+def _split_system_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]]:
+    system_parts: list[str] = []
+    anth_messages: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        if role == "system":
+            system_parts.append(content)
+            continue
+        normalized_role = role if role in {"user", "assistant"} else "user"
+        anth_messages.append({"role": normalized_role, "content": content})
+    return "\n\n".join(part for part in system_parts if part), anth_messages
+
+
+def _extract_text_from_anthropic_response(response: Any) -> str:
+    parts: list[str] = []
+    for block in getattr(response, "content", []):
+        text = getattr(block, "text", None)
+        if text:
+            parts.append(text)
+    return "".join(parts).strip()
+
+
+def _chat_completion_anthropic(
+    client: Any,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    json_mode: bool,
+) -> str:
+    from anthropic import APIConnectionError, APIError, APIStatusError, RateLimitError
+
+    max_retries = 3
+    backoff_seconds = [1, 2, 4]
+    system_prompt, anth_messages = _split_system_messages(messages)
+    if json_mode:
+        json_instruction = "Return only a valid JSON object with no markdown fences or extra prose."
+        system_prompt = f"{system_prompt}\n\n{json_instruction}" if system_prompt else json_instruction
+
+    for attempt in range(max_retries):
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=2048,
+                temperature=temperature,
+                system=system_prompt,
+                messages=anth_messages,
+            )
+            content = _extract_text_from_anthropic_response(response)
+            if not content:
+                raise ValueError(f"LLM returned empty content (provider=claude, model={model})")
+            if json_mode:
+                try:
+                    json.loads(content)
+                except (json.JSONDecodeError, TypeError):
+                    content = _extract_json_from_text(content)
+            return content
+        except (RateLimitError, APIConnectionError):
+            if attempt < max_retries - 1:
+                time.sleep(backoff_seconds[attempt])
+                continue
+            raise
+        except APIStatusError as exc:
+            status_code = getattr(exc, "status_code", None)
+            is_retryable = status_code is None or status_code >= 500 or status_code == 429
+            if is_retryable and attempt < max_retries - 1:
+                time.sleep(backoff_seconds[attempt])
+                continue
+            raise
+        except APIError:
+            raise
+
+    raise RuntimeError("Unreachable: all Anthropic retry attempts exhausted")
+
+
 def get_default_config(
     provider: LLMProvider,
     api_key: str = "",
@@ -220,13 +348,24 @@ def validate_connection(config: LLMConfig) -> tuple[bool, str]:
     """Validate that the LLM configuration works."""
     try:
         client = create_llm_client(config)
-        response = client.chat.completions.create(
-            model=config.model,
-            messages=[{"role": "user", "content": "Respond with a single word: OK"}],
-            temperature=0.0,
-        )
-        if not response.choices or not response.choices[0].message.content:
-            return False, "Received empty response"
+        if config.provider == LLMProvider.CLAUDE:
+            response = client.messages.create(
+                model=config.model,
+                max_tokens=32,
+                temperature=0.0,
+                messages=[{"role": "user", "content": "Respond with a single word: OK"}],
+            )
+            content = _extract_text_from_anthropic_response(response)
+            if not content:
+                return False, "Received empty response"
+        else:
+            response = client.chat.completions.create(
+                model=config.model,
+                messages=[{"role": "user", "content": "Respond with a single word: OK"}],
+                temperature=0.0,
+            )
+            if not response.choices or not response.choices[0].message.content:
+                return False, "Received empty response"
         return True, f"Successfully connected to {config.provider.value}"
 
     except ImportError as e:

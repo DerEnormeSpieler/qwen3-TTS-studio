@@ -27,7 +27,7 @@ Qwen3-TTS is a powerful text-to-speech model, but using it directly requires dea
 ### Podcast Generation
 - **One-Click Podcasts**: Enter a topic, get a complete podcast
 - **AI Script Writing**: LLM-powered outline and transcript generation
-- **Multi-Provider LLM Support**: OpenAI, Ollama, and OpenRouter
+- **Multi-Provider LLM Support**: OpenAI, Ollama, OpenRouter, and Claude (Anthropic API)
 - **Multi-Speaker Support**: Assign different voices to each speaker
 - **Custom Personas**: Create and save speaker personalities
 
@@ -47,6 +47,7 @@ Qwen3-TTS is a powerful text-to-speech model, but using it directly requires dea
   - Ollama (local): no external API key required
   - OpenAI: `OPENAI_API_KEY`
   - OpenRouter: `OPENROUTER_API_KEY`
+  - Claude (direct): `ANTHROPIC_API_KEY`
 
 ## Installation
 
@@ -68,7 +69,7 @@ conda activate qwen3-tts
 
 ```bash
 pip install -U qwen-tts
-pip install gradio soundfile numpy moviepy openai
+pip install gradio soundfile numpy moviepy openai anthropic
 ```
 
 For CUDA users:
@@ -113,11 +114,21 @@ Create a `.env` file (choose based on provider):
 ```bash
 OPENAI_API_KEY=your_openai_api_key_here
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ```
 
 Notes:
 - If you use Ollama, API key is not required (default local endpoint: `http://localhost:11434/v1`).
+- Claude provider uses Anthropic's official Messages API directly.
 - You can also enter provider/model/base URL/API key directly in the Podcast tab under **LLM Provider**.
+
+OpenRouter model options (examples in UI presets):
+- `google/gemini-2.5-flash`
+- `google/gemini-2.5-pro`
+- `anthropic/claude-sonnet-4.5`
+- `openai/gpt-5.2`
+- `openai/gpt-5.3-codex`
+- `deepseek/deepseek-r1`
 
 ## Usage
 

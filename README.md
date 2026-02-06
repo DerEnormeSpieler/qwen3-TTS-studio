@@ -69,13 +69,17 @@ conda activate qwen3-tts
 
 ```bash
 pip install "qwen-tts>=0.1.1"
-pip install gradio soundfile numpy moviepy openai anthropic
+pip install gradio soundfile numpy moviepy openai anthropic packaging
 ```
 
 For CUDA users:
 ```bash
 pip install -U flash-attn --no-build-isolation
 ```
+
+Notes:
+- FlashAttention is attempted automatically on CUDA when available.
+- If FlashAttention initialization fails (for example, CUDA/toolkit mismatch), the app automatically falls back to default attention.
 
 ### 4. Download Models
 
@@ -121,6 +125,10 @@ Notes:
 - If you use Ollama, API key is not required (default local endpoint: `http://localhost:11434/v1`).
 - Claude provider uses Anthropic's official Messages API directly.
 - You can also enter provider/model/base URL/API key directly in the Podcast tab under **LLM Provider**.
+- Optional runtime env vars:
+  - `QWEN_TTS_DEVICE` to force device selection (for example: `mps`, `cuda:0`, `cpu`)
+  - `QWEN_TTS_MIN_NEW_TOKENS` to adjust minimum generation length (default: `60`)
+  - `QWEN_TTS_ALLOW_OLD=1` to bypass the minimum `qwen-tts` version gate (not recommended)
 
 OpenRouter model options (examples in UI presets):
 - `google/gemini-2.5-flash`
@@ -170,7 +178,7 @@ Notes:
 Pull the prebuilt image from GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/bc-dunia/qwen3-tts-studio:0.1.0
+docker pull ghcr.io/bc-dunia/qwen3-tts-studio:latest
 ```
 
 Run the container:
@@ -181,14 +189,14 @@ docker run --rm -it -p 7860:7860 \
   -v "$(pwd)/Qwen3-TTS-Tokenizer-12Hz:/app/Qwen3-TTS-Tokenizer-12Hz" \
   -v "$(pwd)/Qwen3-TTS-12Hz-1.7B-CustomVoice:/app/Qwen3-TTS-12Hz-1.7B-CustomVoice" \
   -v "$(pwd)/Qwen3-TTS-12Hz-1.7B-Base:/app/Qwen3-TTS-12Hz-1.7B-Base" \
-  ghcr.io/bc-dunia/qwen3-tts-studio:0.1.0
+  ghcr.io/bc-dunia/qwen3-tts-studio:latest
 ```
 
 Then open `http://127.0.0.1:7860`.
 
 Notes:
 - Models are mounted at runtime and not bundled in the image. Mount the same directories as shown above.
-- Use `latest` tag for the most recent build: `ghcr.io/bc-dunia/qwen3-tts-studio:latest`
+- For reproducible deployments, pin a release tag (for example: `ghcr.io/bc-dunia/qwen3-tts-studio:0.1.0`).
 - If you use other model variants (0.6B, VoiceDesign), mount those directories the same way.
 
 ### Available Models

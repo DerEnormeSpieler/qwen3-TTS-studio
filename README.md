@@ -140,6 +140,31 @@ python qwen_tts_ui.py
 
 Open `http://127.0.0.1:7860` in your browser.
 
+### Run with Docker
+
+Build image:
+
+```bash
+docker build -t qwen3-tts-studio .
+```
+
+Run container:
+
+```bash
+docker run --rm -it -p 7860:7860 \
+  --env-file .env \
+  -v "$(pwd)/Qwen3-TTS-Tokenizer-12Hz:/app/Qwen3-TTS-Tokenizer-12Hz" \
+  -v "$(pwd)/Qwen3-TTS-12Hz-1.7B-CustomVoice:/app/Qwen3-TTS-12Hz-1.7B-CustomVoice" \
+  -v "$(pwd)/Qwen3-TTS-12Hz-1.7B-Base:/app/Qwen3-TTS-12Hz-1.7B-Base" \
+  qwen3-tts-studio
+```
+
+Then open `http://127.0.0.1:7860`.
+
+Notes:
+- `qwen_tts_ui.py` now reads `GRADIO_SERVER_NAME` and `GRADIO_SERVER_PORT`; Docker image sets these to `0.0.0.0:7860`.
+- If you use other model variants (0.6B, VoiceDesign), mount those directories the same way.
+
 ### Available Models
 
 | Model | Features | Size |

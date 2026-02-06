@@ -6210,4 +6210,6 @@ if __name__ == "__main__":
     print("  • Export history to ZIP")
     print("=" * 50)
     demo.queue(default_concurrency_limit=1)
-    demo.launch(server_name="127.0.0.1", server_port=7860, css=custom_css)
+    server_name = os.getenv("GRADIO_SERVER_NAME", "127.0.0.1")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    demo.launch(server_name=server_name, server_port=server_port, css=custom_css)

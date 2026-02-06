@@ -1,0 +1,16 @@
+.git
+.gitignore
+.omc
+.claude
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.env
+
+# Local model artifacts (mount at runtime instead)
+Qwen3-TTS-12Hz-*
+Qwen3-TTS-Tokenizer-12Hz
+podcast_history
+voice_profiles

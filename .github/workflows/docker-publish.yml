@@ -16,6 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # Step 0: Free up disk space (~30GB) by removing pre-installed tools
+      # Ubuntu runners ship with Android SDK, .NET, Haskell, etc. that are
+      # never needed for Docker builds but consume most of the disk.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
       # Step 1: Checkout repository code
       - name: Checkout code
         uses: actions/checkout@v4

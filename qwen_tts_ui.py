@@ -1681,11 +1681,13 @@ def clone_voice_multi(
         samples_meta = [
             {
                 "path": s.path,
-                "duration": s.duration,
+                "duration": float(s.duration),
                 "transcript": s.transcript,
-                "snr_estimate": s.snr_estimate,
+                "snr_estimate": float(s.snr_estimate)
+                if s.snr_estimate is not None
+                else None,
                 "is_primary": s.is_primary,
-                "weight": s.weight,
+                "weight": float(s.weight),
             }
             for s in sample_infos
         ]

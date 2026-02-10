@@ -15,6 +15,7 @@ import pickle
 import shutil
 import zipfile
 import time
+import copy
 import gc
 import queue
 import threading
@@ -461,6 +462,218 @@ def _prompt_to_cpu(prompt_items):
         except Exception:
             out.append(it)
     return out
+
+
+def _guess_script_language(text: str | None) -> str | None:
+    """Best-effort script guess from Unicode codepoints.
+
+    Returns one of: korean, japanese, cjk, russian, latin, or None.
+
+    Notes:
+    - "japanese" is only returned when Kana is present (strong indicator).
+    - Han-only text is treated as "cjk" (ambiguous between zh/ja). We avoid
+      using cjk vs japanese mismatches to auto-toggle ICL.
+    """
+
+    if not text:
+        return None
+    t = text.strip()
+    if not t:
+        return None
+
+    counts: dict[str, int] = {
+        "korean": 0,
+        "japanese": 0,
+        "cjk": 0,
+        "russian": 0,
+        "latin": 0,
+    }
+
+    for ch in t:
+        if ch.isspace() or ch.isdigit():
+            continue
+        o = ord(ch)
+
+        # Hangul syllables
+        if 0xAC00 <= o <= 0xD7A3:
+            counts["korean"] += 1
+            continue
+        # Hiragana / Katakana (incl. extensions)
+        if (0x3040 <= o <= 0x30FF) or (0x31F0 <= o <= 0x31FF):
+            counts["japanese"] += 1
+            continue
+        # CJK Unified Ideographs (rough)
+        if 0x4E00 <= o <= 0x9FFF:
+            counts["cjk"] += 1
+            continue
+        # Cyrillic
+        if 0x0400 <= o <= 0x04FF:
+            counts["russian"] += 1
+            continue
+        # Basic Latin / Latin-1 supplement / Latin Extended
+        if (0x0041 <= o <= 0x007A) or (0x00C0 <= o <= 0x024F):
+            counts["latin"] += 1
+            continue
+        # ignore punctuation/symbols/other scripts
+
+    total = sum(counts.values())
+    if total < 2:
+        return None
+
+    # Kana presence is a strong Japanese signal even in mixed Kanji/Kana text.
+    if counts["japanese"] >= 1 and counts["japanese"] / total >= 0.2:
+        return "japanese"
+
+    # Otherwise require a clear majority.
+    best = max(counts, key=lambda k: counts[k])
+    best_ratio = counts[best] / total if total else 0.0
+
+    # Latin is easy to appear as acronyms inside CJK; be stricter.
+    if best == "latin" and (counts[best] < 3 or best_ratio < 0.7):
+        return None
+    if best_ratio < 0.6:
+        return None
+
+    return best
+
+
+def _ui_language_to_script(lang: str | None) -> str | None:
+    if not lang:
+        return None
+    l = str(lang).strip().lower()
+    if not l or l == "auto":
+        return None
+    if l == "korean":
+        return "korean"
+    if l == "japanese":
+        return "japanese"
+    if l == "chinese":
+        return "cjk"
+    if l == "russian":
+        return "russian"
+    # Treat remaining supported languages as Latin-script.
+    if l in {
+        "english",
+        "french",
+        "german",
+        "italian",
+        "portuguese",
+        "spanish",
+    }:
+        return "latin"
+    return None
+
+
+def _should_use_xvector_only(
+    *,
+    ref_text: str | None,
+    out_language: str | None,
+    out_text: str | None,
+) -> bool:
+    """Decide whether to disable ICL (use x-vector only) for cross-lingual output."""
+
+    ref_script = _guess_script_language(ref_text)
+
+    out_script = _ui_language_to_script(out_language)
+    if out_script is None:
+        out_script = _guess_script_language(out_text)
+
+    if ref_script is None or out_script is None:
+        return False
+
+    # Avoid auto-toggling between Han-only and Japanese; Han is ambiguous.
+    if (ref_script == "cjk" and out_script == "japanese") or (
+        ref_script == "japanese" and out_script == "cjk"
+    ):
+        return False
+
+    return ref_script != out_script
+
+
+def _should_use_xvector_only_multi(
+    *,
+    ref_texts: list[str | None],
+    out_language: str | None,
+    out_text: str | None,
+) -> bool:
+    out_script = _ui_language_to_script(out_language)
+    if out_script is None:
+        out_script = _guess_script_language(out_text)
+    if out_script is None:
+        return False
+
+    ref_scripts = []
+    for t in ref_texts:
+        s = _guess_script_language(t)
+        if s is not None:
+            ref_scripts.append(s)
+
+    if not ref_scripts:
+        return False
+
+    # Conservative: if references are mixed and any differs from output, disable ICL.
+    for rs in ref_scripts:
+        if (rs == "cjk" and out_script == "japanese") or (
+            rs == "japanese" and out_script == "cjk"
+        ):
+            continue
+        if rs != out_script:
+            return True
+    return False
+
+
+def _make_xvector_only_prompt(prompt_items: Any) -> Any:
+    """Return a prompt equivalent with ICL disabled.
+
+    Keeps speaker embedding but strips ref_code/ref_text and sets flags.
+    """
+
+    if prompt_items is None:
+        return None
+
+    # Dict-shaped prompts (rare in this repo, but handle defensively)
+    if isinstance(prompt_items, dict):
+        out_dict = prompt_items.copy()
+        if "ref_code" in out_dict:
+            out_dict["ref_code"] = None
+        if "ref_text" in out_dict:
+            out_dict["ref_text"] = None
+        out_dict["x_vector_only_mode"] = True
+        out_dict["icl_mode"] = False
+        return out_dict
+
+    prompt_items_list = (
+        prompt_items if isinstance(prompt_items, list) else [prompt_items]
+    )
+
+    out: list[Any] = []
+    for it in prompt_items_list:
+        # Preserve unknown objects as-is.
+        if it is None:
+            out.append(it)
+            continue
+
+        # If it doesn't look like a qwen-tts prompt item, don't touch it.
+        if not hasattr(it, "ref_spk_embedding"):
+            out.append(it)
+            continue
+
+        try:
+            new_it = copy.copy(it)
+            if hasattr(new_it, "ref_code"):
+                setattr(new_it, "ref_code", None)
+            if hasattr(new_it, "ref_text"):
+                setattr(new_it, "ref_text", None)
+            if hasattr(new_it, "x_vector_only_mode"):
+                setattr(new_it, "x_vector_only_mode", True)
+            if hasattr(new_it, "icl_mode"):
+                setattr(new_it, "icl_mode", False)
+            out.append(new_it)
+        except Exception as e:
+            print(f"[Prompt] Warning: failed to strip ICL ({type(e).__name__})")
+            out.append(it)
+
+    return out if isinstance(prompt_items, list) else out[0]
 
 
 def estimate_max_tokens(
@@ -1446,6 +1659,22 @@ def clone_voice(
             x_vector_only_mode=False,
         )
 
+        # Keep the saved prompt in full ICL form when possible, but optionally
+        # disable ICL at generation time for cross-lingual output.
+        runtime_prompt = voice_clone_prompt
+        runtime_xvector_only = False
+        if test_text.strip():
+            try:
+                runtime_xvector_only = _should_use_xvector_only(
+                    ref_text=ref_text,
+                    out_language=language,
+                    out_text=test_text,
+                )
+            except Exception:
+                runtime_xvector_only = False
+            if runtime_xvector_only:
+                runtime_prompt = _make_xvector_only_prompt(voice_clone_prompt)
+
         output_audio = None
         if test_text.strip():
             if len(test_text) > MAX_CHARS:
@@ -1462,7 +1691,7 @@ def clone_voice(
             wavs, sr = model.generate_voice_clone(
                 text=test_text,
                 language=language,
-                voice_clone_prompt=voice_clone_prompt,
+                voice_clone_prompt=runtime_prompt,
                 non_streaming_mode=True,
                 temperature=temperature,
                 top_k=int(top_k),
@@ -1496,6 +1725,7 @@ def clone_voice(
                         "subtalker_top_k": int(sub_top_k),
                         "subtalker_top_p": sub_top_p,
                         "language": language,
+                        "x_vector_only_mode_runtime": runtime_xvector_only,
                     },
                 )
             duration = get_audio_duration(output_audio)
@@ -1528,6 +1758,8 @@ def clone_voice_multi(
     model_name: str,
     test_text: str,
     language: str,
+    ref_language: str,
+    crosslingual_opt: bool,
     combine_samples: bool,
     temperature: float,
     top_k: int,
@@ -1614,6 +1846,34 @@ def clone_voice_multi(
                 x_vector_only_mode=x_vector_only_mode,
             )
 
+        # Keep the stored prompt as-is, but optionally disable ICL at generation
+        # time for cross-lingual output when ICL is available.
+        runtime_prompt = voice_clone_prompt
+        runtime_xvector_only = bool(x_vector_only_mode)
+        if test_text.strip() and not x_vector_only_mode and bool(crosslingual_opt):
+            ref_texts = [
+                s.transcript for s in sample_infos if getattr(s, "transcript", None)
+            ]
+            if not ref_texts and primary_info is not None:
+                ref_texts = [getattr(primary_info, "transcript", None)]
+
+            try:
+                ref_lang = (ref_language or "").strip().lower()
+                out_lang = (language or "").strip().lower()
+                if ref_lang and ref_lang != "auto" and out_lang and out_lang != "auto":
+                    runtime_xvector_only = ref_lang != out_lang
+                else:
+                    runtime_xvector_only = _should_use_xvector_only_multi(
+                        ref_texts=ref_texts,
+                        out_language=language,
+                        out_text=test_text,
+                    )
+            except Exception:
+                runtime_xvector_only = False
+
+            if runtime_xvector_only:
+                runtime_prompt = _make_xvector_only_prompt(voice_clone_prompt)
+
         output_audio = None
         if test_text.strip():
             if len(test_text) > MAX_CHARS:
@@ -1627,7 +1887,7 @@ def clone_voice_multi(
             wavs, sr = model.generate_voice_clone(
                 text=test_text,
                 language=language,
-                voice_clone_prompt=voice_clone_prompt,
+                voice_clone_prompt=runtime_prompt,
                 non_streaming_mode=True,
                 temperature=temperature,
                 top_k=int(top_k),
@@ -1662,7 +1922,10 @@ def clone_voice_multi(
                         "subtalker_top_k": int(sub_top_k),
                         "subtalker_top_p": sub_top_p,
                         "language": language,
+                        "ref_language": ref_language,
+                        "crosslingual_opt": bool(crosslingual_opt),
                         "num_samples": n_samples,
+                        "x_vector_only_mode_runtime": runtime_xvector_only,
                     },
                 )
             duration = get_audio_duration(output_audio)
@@ -1834,6 +2097,7 @@ def save_cloned_voice_multi(
     voice_name: str,
     description: str,
     style_note: str,
+    ref_language: str,
     audio_files: list,
     transcripts_json: str,
     prompt_path: str,
@@ -1900,11 +2164,23 @@ def save_cloned_voice_multi(
         if transcripts:
             primary_transcript = next(iter(transcripts.values()), "")
 
+        ref_language_ui = (ref_language or "").strip().lower()
+        if not ref_language_ui:
+            ref_language_ui = "auto"
+        if ref_language_ui not in set(LANGUAGES):
+            ref_language_ui = "auto"
+
+        ref_script = _guess_script_language(primary_transcript)
+
         metadata = {
             "name": voice_name,
             "description": description,
             "style_note": style_note,
             "ref_text": primary_transcript,
+            # Back-compat: historically this stored a script guess.
+            "ref_language": ref_script,
+            "ref_language_script": ref_script,
+            "ref_language_ui": ref_language_ui,
             "model": model_name or "1.7B-Base",
             "created": datetime.now().isoformat(),
             "multi_sample": True,
@@ -1924,7 +2200,14 @@ def save_cloned_voice_multi(
 
 
 def save_cloned_voice(
-    voice_name, description, style_note, ref_audio, ref_text, prompt_path, model_name
+    voice_name,
+    description,
+    style_note,
+    ref_language,
+    ref_audio,
+    ref_text,
+    prompt_path,
+    model_name,
 ):
     if not voice_name.strip():
         gr.Warning("Please enter a name for this voice")
@@ -1957,11 +2240,23 @@ def save_cloned_voice(
         if ref_audio and isinstance(ref_audio, str):
             shutil.copy(ref_audio, voice_dir / "ref_audio.wav")
 
+        ref_language_ui = (ref_language or "").strip().lower()
+        if not ref_language_ui:
+            ref_language_ui = "auto"
+        if ref_language_ui not in set(LANGUAGES):
+            ref_language_ui = "auto"
+
+        ref_script = _guess_script_language(ref_text)
+
         metadata = {
             "name": voice_name,
             "description": description,
             "style_note": style_note,
             "ref_text": ref_text,
+            # Back-compat: historically this stored a script guess.
+            "ref_language": ref_script,
+            "ref_language_script": ref_script,
+            "ref_language_ui": ref_language_ui,
             "model": model_name or "1.7B-Base",
             "created": datetime.now().isoformat(),
         }
@@ -1980,6 +2275,7 @@ def generate_with_saved_voice(
     text,
     saved_voice_id,
     language,
+    crosslingual_opt,
     temperature,
     top_k,
     top_p,
@@ -2035,6 +2331,39 @@ def generate_with_saved_voice(
         with open(prompt_path, "rb") as f:
             voice_clone_prompt = pickle.load(f)
 
+        # Optionally disable ICL at generation time for cross-lingual output.
+        runtime_prompt = voice_clone_prompt
+        runtime_xvector_only = False
+        if bool(crosslingual_opt):
+            try:
+                ref_lang_raw = meta.get("ref_language_ui")
+                if not ref_lang_raw and meta.get("ref_language") in set(LANGUAGES):
+                    ref_lang_raw = meta.get("ref_language")
+                ref_lang = (ref_lang_raw or "").strip().lower()
+                out_lang = (language or "").strip().lower()
+
+                if ref_lang and ref_lang != "auto" and out_lang and out_lang != "auto":
+                    runtime_xvector_only = ref_lang != out_lang
+                else:
+                    ref_texts: list[str | None] = []
+                    ref_texts.append(meta.get("ref_text"))
+                    samples = meta.get("samples")
+                    if isinstance(samples, list):
+                        for s in samples:
+                            if isinstance(s, dict):
+                                ref_texts.append(s.get("transcript"))
+
+                    runtime_xvector_only = _should_use_xvector_only_multi(
+                        ref_texts=ref_texts,
+                        out_language=language,
+                        out_text=text,
+                    )
+            except Exception:
+                runtime_xvector_only = False
+
+            if runtime_xvector_only:
+                runtime_prompt = _make_xvector_only_prompt(voice_clone_prompt)
+
         progress(0.1, desc=f"Loading {model_name}...")
         model = get_model(model_name)
         load_time = time.time() - start_time
@@ -2047,7 +2376,7 @@ def generate_with_saved_voice(
         wavs, sr = model.generate_voice_clone(
             text=text,
             language=language,
-            voice_clone_prompt=voice_clone_prompt,
+            voice_clone_prompt=runtime_prompt,
             non_streaming_mode=True,
             temperature=temperature,
             top_k=int(top_k),
@@ -2082,6 +2411,8 @@ def generate_with_saved_voice(
                     "subtalker_top_p": sub_top_p,
                     "language": language,
                     "saved_voice_id": saved_voice_id,
+                    "crosslingual_opt": bool(crosslingual_opt),
+                    "x_vector_only_mode_runtime": runtime_xvector_only,
                 },
             )
 
@@ -2100,13 +2431,13 @@ def generate_with_saved_voice(
 
 def get_voice_details(saved_voice_id):
     if not saved_voice_id:
-        return "", "", "", "", None
+        return "", "", "", "", "", None
 
     voice_dir = SAVED_VOICES_DIR / saved_voice_id
     meta_path = voice_dir / "metadata.json"
 
     if not meta_path.exists():
-        return "Not found", "", "", "", None
+        return "Not found", "", "", "", "", None
 
     with open(meta_path) as f:
         meta = json.load(f)
@@ -2114,10 +2445,25 @@ def get_voice_details(saved_voice_id):
     ref_audio_path = voice_dir / "ref_audio.wav"
     ref_audio = str(ref_audio_path) if ref_audio_path.exists() else None
 
+    ref_lang_ui = meta.get("ref_language_ui")
+    if not ref_lang_ui:
+        ref_lang_ui = meta.get("ref_language")
+    if not ref_lang_ui:
+        ref_lang_ui = "auto"
+
+    ref_lang_display = str(ref_lang_ui)
+    if ref_lang_display not in set(LANGUAGES):
+        # Back-compat where we stored a coarse script guess.
+        if ref_lang_display in {"latin", "cjk", "korean", "japanese", "russian"}:
+            ref_lang_display = f"auto ({ref_lang_display})"
+        else:
+            ref_lang_display = "auto"
+
     return (
         meta.get("description", ""),
         meta.get("style_note", ""),
         meta.get("ref_text", ""),
+        ref_lang_display,
         meta.get("model", "Unknown"),
         ref_audio,
     )
@@ -3525,6 +3871,17 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
                             vc_language = gr.Dropdown(
                                 choices=LANGUAGES, value="auto", label="Output Language"
                             )
+                            vc_ref_language = gr.Dropdown(
+                                choices=LANGUAGES,
+                                value="auto",
+                                label="Reference Language",
+                                info="Language spoken in the reference samples (recommended if you generate in a different language)",
+                            )
+                            vc_crosslingual_opt = gr.Checkbox(
+                                label="다국어 발음 우선",
+                                value=True,
+                                info="Keeps voice identity but may reduce transcript-based style transfer when languages differ",
+                            )
 
                         with gr.Column(scale=2):
                             gr.HTML(
@@ -3717,6 +4074,9 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
                             sv_model_info = gr.Textbox(
                                 label="Model Used", interactive=False
                             )
+                            sv_ref_language_info = gr.Textbox(
+                                label="Reference Language", interactive=False
+                            )
                             sv_description = gr.Textbox(
                                 label="Description", interactive=False, lines=2
                             )
@@ -3740,6 +4100,12 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
 
                             sv_language = gr.Dropdown(
                                 choices=LANGUAGES, value="auto", label="Language"
+                            )
+
+                            sv_crosslingual_opt = gr.Checkbox(
+                                label="다국어 발음 우선",
+                                value=True,
+                                info="If output language differs from the reference language, prioritize pronunciation; may reduce style transfer",
                             )
 
                             sv_generate_btn = gr.Button(
@@ -6118,6 +6484,8 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
             vc_model,
             vc_test_text,
             vc_language,
+            vc_ref_language,
+            vc_crosslingual_opt,
             vc_combine_samples,
         ]
         + all_param_sliders,
@@ -6168,6 +6536,7 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
             vc_name,
             vc_description,
             vc_style_note,
+            vc_ref_language,
             vc_ref_audio,
             vc_transcripts_json,
             current_prompt_data,
@@ -6195,6 +6564,7 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
             sv_description,
             sv_style_note,
             sv_ref_text,
+            sv_ref_language_info,
             sv_model_info,
             sv_ref_audio,
         ],
@@ -6208,7 +6578,8 @@ with gr.Blocks(title="Qwen3-TTS Studio", css=custom_css) as demo:
 
     sv_generate_btn.click(
         fn=generate_with_saved_voice,
-        inputs=[sv_text, sv_voice_dropdown, sv_language] + all_param_sliders,
+        inputs=[sv_text, sv_voice_dropdown, sv_language, sv_crosslingual_opt]
+        + all_param_sliders,
         outputs=[sv_audio, sv_status],
         concurrency_limit=1,
         concurrency_id="generation",

@@ -60,7 +60,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       # Step 6: Build and push Docker image to GHCR
       # Uses multi-stage Dockerfile for optimized image size

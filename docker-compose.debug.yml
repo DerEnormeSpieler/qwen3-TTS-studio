@@ -1,0 +1,64 @@
+services:
+  qwen-tts-debug:
+    image: qwen3-tts-studio
+    user: "root"
+    ports:
+      - "7860:7860"
+      - "5678:5678"
+    volumes:
+      # Mount source code for live debugging
+      - ./:/app
+      # Mount model directories
+      - ./Qwen3-TTS-Tokenizer-12Hz:/app/Qwen3-TTS-Tokenizer-12Hz
+      - ./Qwen3-TTS-12Hz-1.7B-CustomVoice:/app/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      - ./Qwen3-TTS-12Hz-1.7B-Base:/app/Qwen3-TTS-12Hz-1.7B-Base
+      - ./saved_voices:/app/saved_voices
+      - ./personas:/app/personas
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      - HOME=/root
+    # Start with debugpy waiting for client
+    command: python -m debugpy --listen 0.0.0.0:5678 --wait-for-client qwen_tts_ui.py
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  qwen-tts-debug-nowait:
+    image: qwen3-tts-studio
+    user: "root"
+    ports:
+      - "7860:7860"
+      - "5678:5678"
+    volumes:
+      - ./:/app
+      - ./Qwen3-TTS-Tokenizer-12Hz:/app/Qwen3-TTS-Tokenizer-12Hz
+      - ./Qwen3-TTS-12Hz-1.7B-CustomVoice:/app/Qwen3-TTS-12Hz-1.7B-CustomVoice
+      - ./Qwen3-TTS-12Hz-1.7B-Base:/app/Qwen3-TTS-12Hz-1.7B-Base
+      - ./saved_voices:/app/saved_voices
+      - ./personas:/app/personas
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      - HOME=/root
+    # Start with debugpy, app starts immediately
+    command: python -m debugpy --listen 0.0.0.0:5678 qwen_tts_ui.py
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

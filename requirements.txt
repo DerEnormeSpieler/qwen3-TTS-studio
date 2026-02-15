@@ -7,3 +7,4 @@ moviepy
 openai
 anthropic
 packaging
+debugpy

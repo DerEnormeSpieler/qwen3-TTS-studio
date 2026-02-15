@@ -53,7 +53,7 @@ def get_voice_list() -> list[dict[str, Any]]:
 def generate_preview(voice_id: str, voice_type: str) -> str | None:
     """Generate a 3-second preview audio for a voice."""
     try:
-        from qwen_tts_ui import get_model
+        from audio.model_loader import get_model
         import soundfile as sf
 
         if voice_type == "preset":

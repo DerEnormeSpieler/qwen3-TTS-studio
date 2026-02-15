@@ -206,7 +206,7 @@ def _generate_voice_preview(voice_id: str, voice_type: str) -> str | None:
         Path to the generated audio file, or None if generation fails.
     """
     try:
-        from voice_cards_ui import generate_preview
+        from ui.voice_cards import generate_preview
         return generate_preview(voice_id, voice_type)
     except Exception as e:
         print(f"Voice preview generation failed: {e}")

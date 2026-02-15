@@ -67,25 +67,25 @@ def _resolve_tts_params(quality_preset: object, language: str = "en") -> dict[st
     language = _normalize_language_code(language)
     defaults: dict[str, object] = {
         "model_name": "1.7B-CustomVoice",
-        "temperature": 0.3,
+        "temperature": 0.9,
         "top_k": 50,
-        "top_p": 0.85,
-        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "repetition_penalty": 1.05,
         "max_new_tokens": 1024,
-        "subtalker_temperature": 0.3,
+        "subtalker_temperature": 0.9,
         "subtalker_top_k": 50,
-        "subtalker_top_p": 0.85,
+        "subtalker_top_p": 1.0,
         "language": language,
         "instruct": None,
     }
     presets = {
          # UI names
-         "quick": {"temperature": 0.5, "top_p": 0.9, "max_new_tokens": 768},
+         "quick": {"temperature": 0.9, "top_p": 1.0, "max_new_tokens": 768},
          "standard": {},
-         "premium": {"temperature": 0.2, "top_p": 0.8, "max_new_tokens": 1400},
+         "premium": {"temperature": 0.8, "top_p": 0.95, "max_new_tokens": 1400},
          # Legacy names (backwards compatibility)
-         "draft": {"temperature": 0.5, "top_p": 0.9, "max_new_tokens": 768},
-         "high": {"temperature": 0.2, "top_p": 0.8, "max_new_tokens": 1400},
+         "draft": {"temperature": 0.9, "top_p": 1.0, "max_new_tokens": 768},
+         "high": {"temperature": 0.8, "top_p": 0.95, "max_new_tokens": 1400},
      }
     if isinstance(quality_preset, dict):
         return {**defaults, **quality_preset}
